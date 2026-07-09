@@ -127,6 +127,11 @@ def calculate_statistics(data):
 
             result["allowed_values"][col] = list(set(vals))
 
+    # correlation only makes sense if:
+    #  - there are 2+ numeric columns, AND
+    #  - every numeric column has non-zero variance
+    # (a constant column has undefined correlation -> NaN -> would get
+    #  silently zeroed by clean_float and look like a fake real matrix)
     if len(numeric_columns) >= 2:
 
         arrays = []
@@ -134,16 +139,23 @@ def calculate_statistics(data):
         for c in numeric_columns:
             arrays.append([float(row[c]) for row in data])
 
-        try:
-            corr = np.corrcoef(arrays)
+        stds = [np.std(a) for a in arrays]
 
-            matrix = []
-            for r in corr:
-                matrix.append([clean_float(v) for v in r])
+        if all(s > 0 for s in stds):
 
-            result["correlation"] = matrix
+            try:
+                corr = np.corrcoef(arrays)
 
-        except:
+                matrix = []
+                for r in corr:
+                    matrix.append([clean_float(v) for v in r])
+
+                result["correlation"] = matrix
+
+            except:
+                result["correlation"] = []
+
+        else:
             result["correlation"] = []
 
     return result
