@@ -3,6 +3,7 @@ import base64
 import tempfile
 import json
 import re
+import math
 import numpy as np
 
 from fastapi import FastAPI
@@ -12,9 +13,15 @@ from groq import Groq
 
 app = FastAPI()
 
-client = Groq(
-    api_key=os.getenv("GROQ_API_KEY")
-)
+
+api_key = os.getenv("GROQ_API_KEY")
+
+if not api_key:
+    raise RuntimeError("GROQ_API_KEY missing")
+
+
+client = Groq(api_key=api_key)
+
 
 
 class AudioRequest(BaseModel):
@@ -23,177 +30,288 @@ class AudioRequest(BaseModel):
 
 
 
+def clean_float(x):
+
+    try:
+        x=float(x)
+
+        if math.isnan(x) or math.isinf(x):
+            return 0.0
+
+        return x
+
+    except:
+        return 0.0
+
+
+
+
 def safe_mode(arr):
-    if len(arr) == 0:
+
+    if len(arr)==0:
         return 0.0
 
     values, counts = np.unique(arr, return_counts=True)
 
-    return float(values[np.argmax(counts)])
+    return clean_float(
+        values[np.argmax(counts)]
+    )
+
+
 
 
 
 def calculate_statistics(data):
 
-    output = {
+
+    result = {
+
         "rows": len(data),
+
         "columns": [],
+
         "mean": {},
+
         "std": {},
+
         "variance": {},
+
         "min": {},
+
         "max": {},
+
         "median": {},
+
         "mode": {},
+
         "range": {},
+
         "allowed_values": {},
+
         "value_range": {},
+
         "correlation": []
+
     }
 
 
+
     if not data:
-        return output
+        return result
 
 
-    columns = list(data[0].keys())
 
-    numeric_cols = []
+    columns=list(data[0].keys())
+
+
+    numeric_columns=[]
+
 
 
     for col in columns:
 
-        values = []
 
-        numeric = True
+        values=[]
+
+        ok=True
+
 
         for row in data:
+
             try:
-                values.append(float(row[col]))
+
+                values.append(
+                    float(row[col])
+                )
+
             except:
-                numeric = False
+
+                ok=False
                 break
 
 
-        if numeric:
 
-            numeric_cols.append(col)
+        if ok:
 
-            arr = np.array(values, dtype=float)
 
-            output["columns"].append(col)
+            numeric_columns.append(col)
 
-            output["mean"][col] = float(np.mean(arr))
-            output["std"][col] = float(np.std(arr))
-            output["variance"][col] = float(np.var(arr))
-            output["min"][col] = float(np.min(arr))
-            output["max"][col] = float(np.max(arr))
-            output["median"][col] = float(np.median(arr))
-            output["mode"][col] = safe_mode(arr)
-            output["range"][col] = float(np.max(arr)-np.min(arr))
+            arr=np.array(
+                values,
+                dtype=float
+            )
 
-            output["value_range"][col] = {
-                "min": float(np.min(arr)),
-                "max": float(np.max(arr))
+
+            result["columns"].append(col)
+
+
+            result["mean"][col]=clean_float(
+                np.mean(arr)
+            )
+
+            result["std"][col]=clean_float(
+                np.std(arr)
+            )
+
+            result["variance"][col]=clean_float(
+                np.var(arr)
+            )
+
+            result["min"][col]=clean_float(
+                np.min(arr)
+            )
+
+            result["max"][col]=clean_float(
+                np.max(arr)
+            )
+
+            result["median"][col]=clean_float(
+                np.median(arr)
+            )
+
+            result["mode"][col]=safe_mode(arr)
+
+
+            result["range"][col]=clean_float(
+                np.max(arr)-np.min(arr)
+            )
+
+
+            result["value_range"][col]={
+
+                "min":clean_float(np.min(arr)),
+
+                "max":clean_float(np.max(arr))
+
             }
+
+
 
         else:
 
-            output["columns"].append(col)
 
-            vals = [
-                str(x[col])
-                for x in data
+            result["columns"].append(col)
+
+
+            vals=[
+                str(row[col])
+                for row in data
             ]
 
-            output["allowed_values"][col] = list(set(vals))
+
+            result["allowed_values"][col]=list(
+                set(vals)
+            )
 
 
-    # correlation
-    if len(numeric_cols) >= 2:
 
-        matrix = []
+    # safe correlation
 
-        arrs = []
+    if len(numeric_columns)>=2:
 
-        for c in numeric_cols:
-            arrs.append(
+
+        matrix=[]
+
+
+        arrays=[]
+
+
+        for c in numeric_columns:
+
+            arrays.append(
+
                 [
                     float(row[c])
                     for row in data
                 ]
+
             )
 
-        corr = np.corrcoef(arrs)
-
-        for row in corr:
-            matrix.append(
-                [
-                    float(x)
-                    for x in row
-                ]
-            )
-
-        output["correlation"] = matrix
 
 
-    return output
+        try:
+
+            corr=np.corrcoef(arrays)
+
+
+            for r in corr:
+
+                matrix.append(
+
+                    [
+                        clean_float(v)
+                        for v in r
+                    ]
+
+                )
+
+
+            result["correlation"]=matrix
+
+
+        except:
+
+            result["correlation"]=[]
+
+
+
+    return result
 
 
 
 
-def fallback_score_parser(text):
 
-    """
-    Handles common benchmark format:
+def fallback_parser(text):
 
-    점수1: 80 90 70
-    점수2: 60 75 88
-    """
 
-    score1 = re.search(
+    s1=re.search(
         r"점수1[^0-9]*(.*?)점수2",
         text,
         re.S
     )
 
 
-    score2 = re.search(
+    s2=re.search(
         r"점수2[^0-9]*(.*)",
         text,
         re.S
     )
 
 
-    if score1 and score2:
+    if s1 and s2:
 
-        a = [
+
+        a=[
             float(x)
             for x in re.findall(
                 r"\d+(?:\.\d+)?",
-                score1.group(1)
+                s1.group(1)
             )
         ]
 
-        b = [
+
+        b=[
             float(x)
             for x in re.findall(
                 r"\d+(?:\.\d+)?",
-                score2.group(1)
+                s2.group(1)
             )
         ]
+
 
 
         rows=[]
 
+
         for x,y in zip(a,b):
 
-            rows.append(
-                {
-                    "점수1":x,
-                    "점수2":y
-                }
-            )
+            rows.append({
+
+                "점수1":x,
+
+                "점수2":y
+
+            })
 
 
         if rows:
@@ -201,39 +319,9 @@ def fallback_score_parser(text):
 
 
 
-    # generic number fallback
-
-    nums = [
-        float(x)
-        for x in re.findall(
-            r"\d+(?:\.\d+)?",
-            text
-        )
-    ]
-
-
-    if len(nums)>=4:
-
-        half=len(nums)//2
-
-        rows=[]
-
-        for x,y in zip(
-            nums[:half],
-            nums[half:]
-        ):
-
-            rows.append(
-                {
-                    "점수1":x,
-                    "점수2":y
-                }
-            )
-
-        return rows
-
-
     return []
+
+
 
 
 
@@ -243,68 +331,69 @@ def parse_transcript(text):
 
 
     prompt=f"""
-Extract the dataset from this transcript.
+
+Extract the dataset.
 
 Transcript:
+
 {text}
 
 
-Return ONLY JSON.
-
-Format:
+Return ONLY JSON:
 
 {{
  "data":[
    {{
-    "column_name":number
+    "점수1":80,
+    "점수2":90
    }}
  ]
 }}
 
-Rules:
-- Preserve Korean column names.
-- Do not add explanations.
-- If transcript contains scores, keep names like 점수1 and 점수2.
-- Every row must be an object.
+No explanation.
 """
 
 
     try:
 
-        response = client.chat.completions.create(
+
+        response=client.chat.completions.create(
 
             model="llama-3.3-70b-versatile",
 
             temperature=0,
 
             messages=[
+
                 {
                     "role":"user",
                     "content":prompt
                 }
+
             ]
+
         )
 
 
-        content=response.choices[0].message.content.strip()
+        content=response.choices[0].message.content
 
 
         content=content.replace(
             "```json",
             ""
-        )
-
-        content=content.replace(
+        ).replace(
             "```",
             ""
         )
 
 
         start=content.find("{")
+
         end=content.rfind("}")
 
 
         if start!=-1 and end!=-1:
+
 
             obj=json.loads(
                 content[start:end+1]
@@ -321,11 +410,15 @@ Rules:
                 return data
 
 
-    except Exception:
-        pass
+    except Exception as e:
+
+        print("LLM parse error:",e)
 
 
-    return fallback_score_parser(text)
+
+    return fallback_parser(text)
+
+
 
 
 
@@ -333,7 +426,7 @@ Rules:
 
 @app.post("/")
 @app.post("/audio-analysis")
-async def analyze_audio(req: AudioRequest):
+async def analyze_audio(req:AudioRequest):
 
 
     try:
@@ -345,29 +438,58 @@ async def analyze_audio(req: AudioRequest):
 
 
         with tempfile.NamedTemporaryFile(
-            suffix=".wav"
+            suffix=".wav",
+            delete=False
         ) as f:
 
 
             f.write(audio_bytes)
 
-            f.flush()
+            path=f.name
 
 
-            with open(
-                f.name,
-                "rb"
-            ) as audio:
+
+        try:
 
 
-                transcript = client.audio.transcriptions.create(
+            with open(path,"rb") as audio:
 
-                    file=audio,
+
+                result=client.audio.transcriptions.create(
+
+                    file=(
+
+                        "audio.wav",
+
+                        audio.read()
+
+                    ),
 
                     model="whisper-large-v3-turbo",
 
                     response_format="text"
+
                 )
+
+
+
+            if isinstance(result,str):
+
+                transcript=result
+
+            else:
+
+                transcript=result.text
+
+
+
+        finally:
+
+
+            if os.path.exists(path):
+
+                os.remove(path)
+
 
 
         data=parse_transcript(
@@ -381,21 +503,38 @@ async def analyze_audio(req: AudioRequest):
 
 
 
-    except Exception:
+    except Exception as e:
+
+
+        print("FINAL ERROR:",repr(e))
 
 
         return {
+
             "rows":0,
+
             "columns":[],
+
             "mean":{},
+
             "std":{},
+
             "variance":{},
+
             "min":{},
+
             "max":{},
+
             "median":{},
+
             "mode":{},
+
             "range":{},
+
             "allowed_values":{},
+
             "value_range":{},
+
             "correlation":[]
+
         }
