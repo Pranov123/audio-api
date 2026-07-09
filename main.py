@@ -127,7 +127,6 @@ def calculate_statistics(data):
 
             result["allowed_values"][col] = list(set(vals))
 
-    # correlation only if 2+ numeric columns actually exist
     if len(numeric_columns) >= 2:
 
         arrays = []
@@ -152,13 +151,40 @@ def calculate_statistics(data):
 
 
 
+def normalize_keys(data):
+    """
+    Normalizes column/key names so formatting differences in the transcript
+    or LLM output (e.g. "점수 1" vs "점수1") don't produce mismatched keys.
+    Currently collapses whitespace between '점수' and its trailing number.
+    """
+
+    normalized = []
+
+    for row in data:
+
+        new_row = {}
+
+        for k, v in row.items():
+
+            nk = k.strip()
+            nk = re.sub(r"점수\s*(\d+)", r"점수\1", nk)
+            nk = re.sub(r"\s+", "", nk) if re.fullmatch(r"점수\d+", nk) else nk
+
+            new_row[nk] = v
+
+        normalized.append(new_row)
+
+    return normalized
+
+
+
+
 def fallback_parser(text):
 
     print("TRANSCRIPT:", text)
 
     text = text.replace("\n", " ")
 
-    # Discover which score labels ACTUALLY appear (1, 2, 3, ... — could be just one)
     label_numbers = sorted(set(int(n) for n in re.findall(r"점수\s*(\d+)", text)))
 
     print("DETECTED LABELS:", label_numbers)
@@ -196,9 +222,6 @@ def fallback_parser(text):
 
             return rows
 
-    # Ultimate fallback: no recognizable labels at all -> treat as a SINGLE column.
-    # (Previously this force-split numbers into two fake columns, which was wrong
-    # whenever the transcript only ever described one variable.)
     nums = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", text)]
 
     if nums:
@@ -221,6 +244,7 @@ Rules:
 - If the transcript only describes ONE variable/column, return data with only that one key per row.
 - If it describes multiple variables, include all of them.
 - Preserve the number of data points exactly as stated.
+- Column names must not contain extra whitespace (e.g. use "점수1", not "점수 1").
 
 Transcript:
 {text}
@@ -255,15 +279,15 @@ No explanation, no markdown, no code fences.
             data = obj.get("data", [])
 
             if data and len(data) > 0:
-                return data
+                return normalize_keys(data)
 
             print("LLM FAILED, USING FALLBACK")
-            return fallback_parser(text)
+            return normalize_keys(fallback_parser(text))
 
     except Exception as e:
         print("LLM parse error:", e)
 
-    return fallback_parser(text)
+    return normalize_keys(fallback_parser(text))
 
 
 
