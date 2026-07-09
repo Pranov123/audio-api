@@ -263,55 +263,131 @@ def calculate_statistics(data):
 
 def fallback_parser(text):
 
-
-    s1=re.search(
-        r"점수1[^0-9]*(.*?)점수2",
-        text,
-        re.S
-    )
+    print("TRANSCRIPT:", text)
 
 
-    s2=re.search(
+    # normalize
+    text = text.replace("\n", " ")
+
+
+    # Find score1 numbers
+    score1_patterns = [
+        r"점수1[^0-9]*(.*?)(?=점수2)",
+        r"점수\s*1[^0-9]*(.*?)(?=점수\s*2)",
+        r"첫\s*번째\s*점수[^0-9]*(.*?)(?=두\s*번째)",
+    ]
+
+
+    score2_patterns = [
         r"점수2[^0-9]*(.*)",
-        text,
-        re.S
-    )
+        r"점수\s*2[^0-9]*(.*)",
+        r"두\s*번째\s*점수[^0-9]*(.*)",
+    ]
 
 
-    if s1 and s2:
+    a=[]
+    b=[]
 
 
-        a=[
-            float(x)
-            for x in re.findall(
-                r"\d+(?:\.\d+)?",
-                s1.group(1)
+    for p in score1_patterns:
+
+        m=re.search(
+            p,
+            text,
+            re.I
+        )
+
+        if m:
+
+            a=[
+                float(x)
+                for x in re.findall(
+                    r"\d+(?:\.\d+)?",
+                    m.group(1)
+                )
+            ]
+
+            break
+
+
+
+    for p in score2_patterns:
+
+        m=re.search(
+            p,
+            text,
+            re.I
+        )
+
+        if m:
+
+            b=[
+                float(x)
+                for x in re.findall(
+                    r"\d+(?:\.\d+)?",
+                    m.group(1)
+                )
+            ]
+
+            break
+
+
+
+    print("PARSED SCORE1:",a)
+    print("PARSED SCORE2:",b)
+
+
+
+    if a and b:
+
+        rows=[]
+
+        for x,y in zip(a,b):
+
+            rows.append(
+                {
+                    "점수1":x,
+                    "점수2":y
+                }
             )
-        ]
+
+        return rows
 
 
-        b=[
-            float(x)
-            for x in re.findall(
-                r"\d+(?:\.\d+)?",
-                s2.group(1)
-            )
-        ]
 
+    # Last fallback:
+    # Assume all numbers are two columns
+
+    nums=[
+        float(x)
+        for x in re.findall(
+            r"\d+(?:\.\d+)?",
+            text
+        )
+    ]
+
+
+    if len(nums)>=2:
+
+
+        half=len(nums)//2
+
+
+        first=nums[:half]
+        second=nums[half:]
 
 
         rows=[]
 
 
-        for x,y in zip(a,b):
+        for x,y in zip(first,second):
 
-            rows.append({
-
-                "점수1":x,
-
-                "점수2":y
-
-            })
+            rows.append(
+                {
+                    "점수1":x,
+                    "점수2":y
+                }
+            )
 
 
         if rows:
@@ -320,13 +396,6 @@ def fallback_parser(text):
 
 
     return []
-
-
-
-
-
-
-
 def parse_transcript(text):
 
 
@@ -406,8 +475,12 @@ No explanation.
             )
 
 
-            if data:
+            if data and len(data)>0:
                 return data
+
+
+            print("LLM FAILED, USING FALLBACK")
+            return fallback_parser(text)
 
 
     except Exception as e:
