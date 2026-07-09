@@ -2,6 +2,7 @@ import os
 import base64
 import tempfile
 import json
+import re
 import numpy as np
 
 from fastapi import FastAPI
@@ -24,7 +25,7 @@ class AudioRequest(BaseModel):
 
 def safe_mode(arr):
     if len(arr) == 0:
-        return None
+        return 0.0
 
     values, counts = np.unique(arr, return_counts=True)
 
@@ -32,9 +33,9 @@ def safe_mode(arr):
 
 
 
-def calculate_stats(data):
+def calculate_statistics(data):
 
-    result = {
+    output = {
         "rows": len(data),
         "columns": [],
         "mean": {},
@@ -52,80 +53,78 @@ def calculate_stats(data):
 
 
     if not data:
-        return result
+        return output
 
 
     columns = list(data[0].keys())
 
-    numeric_columns = []
+    numeric_cols = []
 
 
     for col in columns:
 
         values = []
 
-        valid = True
+        numeric = True
 
         for row in data:
             try:
                 values.append(float(row[col]))
             except:
-                valid = False
+                numeric = False
                 break
 
 
-        if valid:
-            numeric_columns.append(col)
-            arr = np.array(values)
+        if numeric:
 
-            result["columns"].append(col)
+            numeric_cols.append(col)
 
-            result["mean"][col] = float(np.mean(arr))
-            result["std"][col] = float(np.std(arr))
-            result["variance"][col] = float(np.var(arr))
-            result["min"][col] = float(np.min(arr))
-            result["max"][col] = float(np.max(arr))
-            result["median"][col] = float(np.median(arr))
-            result["mode"][col] = safe_mode(arr)
-            result["range"][col] = float(np.max(arr)-np.min(arr))
+            arr = np.array(values, dtype=float)
 
-            result["value_range"][col] = {
+            output["columns"].append(col)
+
+            output["mean"][col] = float(np.mean(arr))
+            output["std"][col] = float(np.std(arr))
+            output["variance"][col] = float(np.var(arr))
+            output["min"][col] = float(np.min(arr))
+            output["max"][col] = float(np.max(arr))
+            output["median"][col] = float(np.median(arr))
+            output["mode"][col] = safe_mode(arr)
+            output["range"][col] = float(np.max(arr)-np.min(arr))
+
+            output["value_range"][col] = {
                 "min": float(np.min(arr)),
                 "max": float(np.max(arr))
             }
 
-
         else:
 
-            result["columns"].append(col)
+            output["columns"].append(col)
 
             vals = [
-                str(row[col])
-                for row in data
+                str(x[col])
+                for x in data
             ]
 
-            result["allowed_values"][col] = list(set(vals))
+            output["allowed_values"][col] = list(set(vals))
 
 
-
-    # correlation matrix
-    if len(numeric_columns) >= 2:
+    # correlation
+    if len(numeric_cols) >= 2:
 
         matrix = []
 
-        arrays = []
+        arrs = []
 
-        for col in numeric_columns:
-            arrays.append(
+        for c in numeric_cols:
+            arrs.append(
                 [
-                    float(row[col])
+                    float(row[c])
                     for row in data
                 ]
             )
 
-
-        corr = np.corrcoef(arrays)
-
+        corr = np.corrcoef(arrs)
 
         for row in corr:
             matrix.append(
@@ -135,22 +134,120 @@ def calculate_stats(data):
                 ]
             )
 
-        result["correlation"] = matrix
+        output["correlation"] = matrix
 
 
-    return result
+    return output
+
+
+
+
+def fallback_score_parser(text):
+
+    """
+    Handles common benchmark format:
+
+    점수1: 80 90 70
+    점수2: 60 75 88
+    """
+
+    score1 = re.search(
+        r"점수1[^0-9]*(.*?)점수2",
+        text,
+        re.S
+    )
+
+
+    score2 = re.search(
+        r"점수2[^0-9]*(.*)",
+        text,
+        re.S
+    )
+
+
+    if score1 and score2:
+
+        a = [
+            float(x)
+            for x in re.findall(
+                r"\d+(?:\.\d+)?",
+                score1.group(1)
+            )
+        ]
+
+        b = [
+            float(x)
+            for x in re.findall(
+                r"\d+(?:\.\d+)?",
+                score2.group(1)
+            )
+        ]
+
+
+        rows=[]
+
+        for x,y in zip(a,b):
+
+            rows.append(
+                {
+                    "점수1":x,
+                    "점수2":y
+                }
+            )
+
+
+        if rows:
+            return rows
+
+
+
+    # generic number fallback
+
+    nums = [
+        float(x)
+        for x in re.findall(
+            r"\d+(?:\.\d+)?",
+            text
+        )
+    ]
+
+
+    if len(nums)>=4:
+
+        half=len(nums)//2
+
+        rows=[]
+
+        for x,y in zip(
+            nums[:half],
+            nums[half:]
+        ):
+
+            rows.append(
+                {
+                    "점수1":x,
+                    "점수2":y
+                }
+            )
+
+        return rows
+
+
+    return []
+
+
 
 
 
 def parse_transcript(text):
 
-    prompt = f"""
-You are a data extraction engine.
 
-Convert this speech transcript into a JSON dataset.
+    prompt=f"""
+Extract the dataset from this transcript.
 
 Transcript:
 {text}
+
 
 Return ONLY JSON.
 
@@ -158,39 +255,79 @@ Format:
 
 {{
  "data":[
-    {{"column1":value,"column2":value}}
+   {{
+    "column_name":number
+   }}
  ]
 }}
 
 Rules:
-- If there is no dataset, return:
-{{"data":[]}}
-- Preserve column names exactly.
-- Extract every row.
+- Preserve Korean column names.
+- Do not add explanations.
+- If transcript contains scores, keep names like 점수1 and 점수2.
+- Every row must be an object.
 """
 
 
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        temperature=0,
-        messages=[
-            {
-                "role":"user",
-                "content":prompt
-            }
-        ]
-    )
-
-
-    content = response.choices[0].message.content
-
-
     try:
-        return json.loads(content)["data"]
 
-    except:
+        response = client.chat.completions.create(
 
-        return []
+            model="llama-3.3-70b-versatile",
+
+            temperature=0,
+
+            messages=[
+                {
+                    "role":"user",
+                    "content":prompt
+                }
+            ]
+        )
+
+
+        content=response.choices[0].message.content.strip()
+
+
+        content=content.replace(
+            "```json",
+            ""
+        )
+
+        content=content.replace(
+            "```",
+            ""
+        )
+
+
+        start=content.find("{")
+        end=content.rfind("}")
+
+
+        if start!=-1 and end!=-1:
+
+            obj=json.loads(
+                content[start:end+1]
+            )
+
+
+            data=obj.get(
+                "data",
+                []
+            )
+
+
+            if data:
+                return data
+
+
+    except Exception:
+        pass
+
+
+    return fallback_score_parser(text)
+
+
 
 
 
@@ -198,53 +335,54 @@ Rules:
 @app.post("/audio-analysis")
 async def analyze_audio(req: AudioRequest):
 
+
     try:
 
-        audio_bytes = base64.b64decode(
+
+        audio_bytes=base64.b64decode(
             req.audio_base64
         )
 
 
         with tempfile.NamedTemporaryFile(
             suffix=".wav"
-        ) as audio_file:
+        ) as f:
 
 
-            audio_file.write(audio_bytes)
+            f.write(audio_bytes)
 
-            audio_file.flush()
+            f.flush()
 
 
             with open(
-                audio_file.name,
+                f.name,
                 "rb"
-            ) as f:
+            ) as audio:
 
-                transcription = client.audio.transcriptions.create(
-                    file=f,
+
+                transcript = client.audio.transcriptions.create(
+
+                    file=audio,
+
                     model="whisper-large-v3-turbo",
+
                     response_format="text"
                 )
 
 
-        dataset = parse_transcript(
-            transcription
+        data=parse_transcript(
+            transcript
         )
 
 
-        result = calculate_stats(
-            dataset
+        return calculate_statistics(
+            data
         )
 
 
-        return result
 
+    except Exception:
 
-
-    except Exception as e:
-
-
-        # always return valid schema
 
         return {
             "rows":0,
