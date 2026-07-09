@@ -6,7 +6,6 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from groq import Groq
 
-# Initialize Groq client
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 app = FastAPI()
@@ -19,10 +18,8 @@ class AudioRequest(BaseModel):
 @app.post("/") 
 async def analyze_audio(req: AudioRequest):
     try:
-        # Decode base64 audio
         audio_bytes = base64.b64decode(req.audio_base64)
         
-        # Save to temporary file for Groq transcription
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as temp_audio:
             temp_audio.write(audio_bytes)
             temp_audio.flush()
@@ -34,17 +31,23 @@ async def analyze_audio(req: AudioRequest):
                     response_format="text"
                 )
         
-        # Extract numbers from transcription
         numbers = [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", transcription)]
         
-        # Pad with 0.0 if fewer than 2 numbers are found
+        # 数値がある場合は計算し、ない場合は空の辞書を返す
+        if not numbers:
+            return {
+                "rows": 0,
+                "columns": [],
+                "mean": {}, "std": {}, "variance": {}, "min": {}, "max": {},
+                "median": {}, "mode": {}, "range": {}, "allowed_values": {},
+                "value_range": {}, "correlation": []
+            }
+
         while len(numbers) < 2:
             numbers.append(0.0)
         
-        # Take the first two values
         n1, n2 = float(numbers[0]), float(numbers[1])
         
-        # Return strict JSON structure
         return {
             "rows": 1,
             "columns": ["점수1", "점수2"],
