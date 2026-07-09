@@ -81,7 +81,17 @@ def calculate_statistics(data):
     if not data:
         return result
 
-    columns = list(data[0].keys())
+    # IMPORTANT: use the UNION of keys across ALL rows, not just row 0.
+    # Previously this was `list(data[0].keys())`, which silently dropped
+    # any column missing from the first row even if present elsewhere.
+    columns = []
+    seen = set()
+
+    for row in data:
+        for k in row.keys():
+            if k not in seen:
+                seen.add(k)
+                columns.append(k)
 
     numeric_columns = []
 
@@ -123,15 +133,14 @@ def calculate_statistics(data):
 
             result["columns"].append(col)
 
-            vals = [str(row[col]) for row in data]
+            # tolerate rows that are missing this key entirely
+            vals = [str(row.get(col, "")) for row in data]
 
             result["allowed_values"][col] = list(set(vals))
 
     # correlation only makes sense if:
     #  - there are 2+ numeric columns, AND
     #  - every numeric column has non-zero variance
-    # (a constant column has undefined correlation -> NaN -> would get
-    #  silently zeroed by clean_float and look like a fake real matrix)
     if len(numeric_columns) >= 2:
 
         arrays = []
@@ -255,6 +264,7 @@ Rules:
 - Do NOT invent columns that aren't described.
 - If the transcript only describes ONE variable/column, return data with only that one key per row.
 - If it describes multiple variables, include all of them.
+- EVERY row in "data" must include ALL the same keys, even if a value is 0. Never omit a key from a row just because its value is 0 or empty.
 - Preserve the number of data points exactly as stated.
 - Column names must not contain extra whitespace (e.g. use "점수1", not "점수 1").
 
