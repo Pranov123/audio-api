@@ -1,13 +1,11 @@
 import os
 import base64
 import numpy as np
-import io
 import tempfile
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from groq import Groq
 
-# Initialize client
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 app = FastAPI()
@@ -16,13 +14,13 @@ class AudioRequest(BaseModel):
     audio_id: str
     audio_base64: str
 
-@app.post("/audio-analysis") # This MUST match the path in your request
+# Define both /audio-analysis AND / to catch the 404
+@app.post("/audio-analysis")
+@app.post("/") 
 async def analyze_audio(req: AudioRequest):
     try:
-        # 1. Decode base64 audio
         audio_bytes = base64.b64decode(req.audio_base64)
         
-        # 2. Transcribe using Groq
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as temp_audio:
             temp_audio.write(audio_bytes)
             temp_audio.flush()
@@ -34,17 +32,13 @@ async def analyze_audio(req: AudioRequest):
                     response_format="text"
                 )
         
-        # 3. Extract numbers from transcription for statistical analysis
         import re
         numbers = [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", transcription)]
-        
-        # Handle cases with no numbers
         if not numbers:
             numbers = [0.0]
         
         arr = np.array(numbers)
         
-        # 4. Return required JSON structure
         return {
             "rows": len(arr),
             "columns": ["value"],
@@ -54,7 +48,7 @@ async def analyze_audio(req: AudioRequest):
             "min": {"value": float(np.min(arr))},
             "max": {"value": float(np.max(arr))},
             "median": {"value": float(np.median(arr))},
-            "mode": {"value": float(np.mean(arr))}, # Simplified
+            "mode": {"value": float(np.mean(arr))},
             "range": {"value": float(np.ptp(arr))},
             "allowed_values": {},
             "value_range": {"min": float(np.min(arr)), "max": float(np.max(arr))},
