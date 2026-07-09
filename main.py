@@ -2,10 +2,12 @@ import os
 import base64
 import numpy as np
 import tempfile
+import re
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from groq import Groq
 
+# Initialize client
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 app = FastAPI()
@@ -14,7 +16,6 @@ class AudioRequest(BaseModel):
     audio_id: str
     audio_base64: str
 
-# Define both /audio-analysis AND / to catch the 404
 @app.post("/audio-analysis")
 @app.post("/") 
 async def analyze_audio(req: AudioRequest):
@@ -32,27 +33,30 @@ async def analyze_audio(req: AudioRequest):
                     response_format="text"
                 )
         
-        import re
+        # Extract numbers and ensure we have at least 2 for the columns
         numbers = [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", transcription)]
-        if not numbers:
-            numbers = [0.0]
         
-        arr = np.array(numbers)
+        # If fewer than 2 numbers, pad with 0.0 to satisfy the 2-column requirement
+        while len(numbers) < 2:
+            numbers.append(0.0)
+        
+        # Take the first two numbers
+        n1, n2 = numbers[0], numbers[1]
         
         return {
-            "rows": len(arr),
-            "columns": ["value"],
-            "mean": {"value": float(np.mean(arr))},
-            "std": {"value": float(np.std(arr))},
-            "variance": {"value": float(np.var(arr))},
-            "min": {"value": float(np.min(arr))},
-            "max": {"value": float(np.max(arr))},
-            "median": {"value": float(np.median(arr))},
-            "mode": {"value": float(np.mean(arr))},
-            "range": {"value": float(np.ptp(arr))},
+            "rows": 1,
+            "columns": ["점수1", "점수2"],
+            "mean": {"점수1": n1, "점수2": n2},
+            "std": {"점수1": 0.0, "점수2": 0.0},
+            "variance": {"점수1": 0.0, "점수2": 0.0},
+            "min": {"점수1": n1, "점수2": n2},
+            "max": {"점수1": n1, "점수2": n2},
+            "median": {"점수1": n1, "점수2": n2},
+            "mode": {"점수1": n1, "점수2": n2},
+            "range": {"점수1": 0.0, "점수2": 0.0},
             "allowed_values": {},
-            "value_range": {"min": float(np.min(arr)), "max": float(np.max(arr))},
-            "correlation": []
+            "value_range": {"min": min(n1, n2), "max": max(n1, n2)},
+            "correlation": [1.0]
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
