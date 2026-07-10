@@ -60,6 +60,32 @@ def safe_mode(arr):
 
 
 
+def is_strict_number(v):
+    """
+    True only if v is unambiguously a bare number (int/float, or a string
+    that IS a number with nothing else attached - no units, no words,
+    no trailing/leading characters). This is what prevents things like
+    "3점", "우수", "약 3" from being silently treated as numeric.
+    """
+
+    if isinstance(v, bool):
+        return False
+
+    if isinstance(v, (int, float)):
+        return True
+
+    if isinstance(v, str):
+        s = v.strip()
+        if s == "":
+            return False
+        # must match a plain int/float and NOTHING else (no suffix/prefix)
+        return bool(re.fullmatch(r"-?\d+(\.\d+)?", s))
+
+    return False
+
+
+
+
 def calculate_statistics(data):
 
     result = {
@@ -81,9 +107,8 @@ def calculate_statistics(data):
     if not data:
         return result
 
-    # IMPORTANT: use the UNION of keys across ALL rows, not just row 0.
-    # Previously this was `list(data[0].keys())`, which silently dropped
-    # any column missing from the first row even if present elsewhere.
+    # Use the UNION of keys across ALL rows, not just row 0, so a column
+    # missing from the first row (but present elsewhere) isn't dropped.
     columns = []
     seen = set()
 
@@ -101,11 +126,17 @@ def calculate_statistics(data):
         ok = True
 
         for row in data:
-            try:
-                values.append(float(row[col]))
-            except:
+            v = row.get(col, None)
+
+            # A column only counts as numeric if EVERY row's value is
+            # strictly a bare number. Any non-numeric value (word, label,
+            # a number with attached units/qualifiers, missing value, etc.)
+            # disqualifies the whole column from being numeric.
+            if not is_strict_number(v):
                 ok = False
                 break
+
+            values.append(float(v))
 
         if ok:
 
@@ -201,6 +232,13 @@ def normalize_keys(data):
 
 
 def fallback_parser(text):
+    """
+    Regex-based fallback used only when the LLM call fails or returns
+    nothing. IMPORTANT: this must NOT force values into numbers when the
+    original text segment contains anything other than a bare number
+    (units, words, qualifiers, etc.) - otherwise categorical data gets
+    mis-classified as numeric downstream.
+    """
 
     print("TRANSCRIPT:", text)
 
@@ -225,9 +263,22 @@ def fallback_parser(text):
             m = re.search(pattern, text, re.I)
 
             if m:
-                nums = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", m.group(1))]
-                if nums:
-                    columns[f"점수{label_num}"] = nums
+                # Extract candidate tokens (comma/space separated chunks),
+                # not just raw digit substrings. Keep each token AS-IS so
+                # that things like "3점" or "우수" survive intact instead
+                # of being reduced to a bare digit.
+                raw_segment = m.group(1).strip()
+
+                tokens = [
+                    t.strip() for t in re.split(r"[,\uFF0C/]|(?:\s{2,})", raw_segment)
+                    if t.strip()
+                ]
+
+                if not tokens:
+                    tokens = [t for t in raw_segment.split() if t]
+
+                if tokens:
+                    columns[f"점수{label_num}"] = tokens
 
         lengths = [len(v) for v in columns.values()]
 
@@ -237,7 +288,18 @@ def fallback_parser(text):
             n = lengths[0]
 
             for i in range(n):
-                rows.append({k: v[i] for k, v in columns.items()})
+                row = {}
+                for k, v in columns.items():
+                    token = v[i]
+                    # Only coerce to a number if the token is a STRICT bare
+                    # number. Otherwise keep the original string so
+                    # calculate_statistics correctly routes it to
+                    # allowed_values instead of forcing it numeric.
+                    if is_strict_number(token):
+                        row[k] = float(token)
+                    else:
+                        row[k] = token
+                rows.append(row)
 
             print("PARSED ROWS:", rows)
 
@@ -267,6 +329,11 @@ Rules:
 - EVERY row in "data" must include ALL the same keys, even if a value is 0. Never omit a key from a row just because its value is 0 or empty.
 - Preserve the number of data points exactly as stated.
 - Column names must not contain extra whitespace (e.g. use "점수1", not "점수 1").
+- CRITICAL - preserve value type exactly as spoken:
+  - If a value is stated as a plain number (digits), return it as a JSON number with nothing else attached.
+  - If a value is a word, label, category, grade, rating name, or anything that is not literally a bare number (e.g. "우수", "보통", "합격", "3등급", "없음", "3점" with a unit word attached), return it as a JSON string EXACTLY as heard. Do NOT translate it into a number, do NOT infer a numeric equivalent, do NOT strip qualifier words attached to a number.
+  - A column should only contain JSON numbers for ALL rows if every single row's value for that variable is unambiguously a bare number. If even one row's value is non-numeric text, return EVERY value in that column as a JSON string (do not silently convert the rest to numbers).
+  - Never "clean up," round, or normalize a value's type based on what you think it should logically be - only reflect exactly what was said.
 
 Transcript:
 {text}
